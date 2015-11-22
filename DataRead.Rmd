@@ -1,0 +1,72 @@
+---
+title: "Data Read"
+author: "Mohammed K. Barakat"
+date: "November 8, 2015"
+output: word_document
+---
+
+**PLEASE KNIT THIS RMD FILE BEFORE KNITTING THE CAPSTONE PROJECT RMD FILE**
+
+**Once finished**, please knit the MBCapstoneProject.Rmd file to reproduce the analysis.
+
+## Load necessary packages
+
+```{r LoadPackages,echo=TRUE,message=FALSE}
+library(jsonlite)
+```
+
+## Download raw data from source
+
+```{r downloadData,echo=TRUE,message=FALSE,results='hide'}
+
+# Download raw data, if not existing, and unzip it, if not unzipped.
+
+# zipped data location at source
+
+fileURL <- "https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/yelp_dataset_challenge_academic_dataset.zip"
+
+# unzipped data location (locally)
+
+dataFolder <- "./yelp_dataset_challenge_academic_dataset"
+
+if (file.exists(dataFolder) == FALSE) {
+  dataFileZIP <- "./yelp_dataset_challenge_academic_dataset.zip"
+  
+  if (file.exists(dataFileZIP) == FALSE) {
+    download.file(fileURL, destfile = dataFileZIP)
+    unzip(dataFileZIP)
+  }else{
+    unzip(dataFileZIP)  
+  }
+}
+```
+
+## Save raw data files as .RDS locally
+
+```{r saveRDS,echo=TRUE,message=FALSE,results='hide'}
+
+# Specify each raw data JSON file location
+
+businessFile<-"./yelp_dataset_challenge_academic_dataset/yelp_academic_dataset_business.json"
+checkinFile<-"./yelp_dataset_challenge_academic_dataset/yelp_academic_dataset_checkin.json"
+reviewFile<-"./yelp_dataset_challenge_academic_dataset/yelp_academic_dataset_review.json"
+tipFile<-"./yelp_dataset_challenge_academic_dataset/yelp_academic_dataset_tip.json"
+userFile<-"./yelp_dataset_challenge_academic_dataset/yelp_academic_dataset_user.json"
+
+# Read the JSON files
+
+businessData<-stream_in(file(businessFile)) 
+checkinData<-stream_in(file(checkinFile))
+reviewData<-stream_in(file(reviewFile))
+tipData<-stream_in(file(tipFile))
+userData<-stream_in(file(userFile))
+
+# Save files as .RDS files locally
+# (to save on memory and speed up processing time)
+
+saveRDS(businessData, file="businessData.rds")
+saveRDS(checkinData, file="checkinData.rds")
+saveRDS(reviewData, file="reviewData.rds")
+saveRDS(tipData, file="tipData.rds")
+saveRDS(userData, file="userData.rds")
+```

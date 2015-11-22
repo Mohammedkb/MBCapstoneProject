@@ -1,0 +1,460 @@
+---
+title: Predicting the Usefulness of a Yelp Review Using Machine Learning
+author: "Mohammed K. Barakat"
+date: "November 8, 2015"
+output: word_document
+---
+
+## Introduction
+
+For many purchased products or offered services there is usually a way to reflect on the customer's experience using online review. [Yelp's website](http://www.yelp.com) is a place that collects such reviews of various businesses.
+
+This research tries to answer the question *"Can we predict to what extent a user's review for a business is useful by predicting the number of "useful" votes the review will receive and by predicting a "usefulness" category of the review?"* The prediction algorithm is based on the user's profile and on quantitative features of the review she/he writes. This analysis is expected to be of interest to yelp.com, yelpers, and businesses as it helps exploit potential useful reviews as soon as they are posted to improve businesses and provide quicker recommendations to potential customers.
+
+**Note:** *To reproduce the same analysis and results you can visit the github repository at (https://github.com/Mohammedkb/MBCapstoneProject) for the complete R code in a .Rmd file.*
+
+## Methods and Data
+
+This section discusses the input data used in the analysis, data processing, Exploratory Data Analysis to give insight into the data, and the Prediction Algorithms used to predict the outcome of review usefulness.
+
+```{r LoadPackages,echo=FALSE,message=FALSE,warning=FALSE}
+
+## Load necessary R packages. Make sure they are installed before loading.
+
+library(knitr)
+library(jsonlite)
+library(dplyr)
+library(ggplot2)
+library(caret)
+library(stringr)
+library(psych)
+```
+
+### Input data
+
+The research uses a dataset that is part of the [Yelp Dataset Challenge](http://www.yelp.com/dataset_challenge) that corresponds to Round 6 of their challenge. The data consists of 5 JSON-formatted files available under [this](https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/yelp_dataset_challenge_academic_dataset.zip) link. The files are: **business** data, **checkin** data, **review** data, **tip** data, and the **user** data. The datasets contain details about businesses and users profiles in addition to users reviews posted between 2004 and 2015. Raw data is first downloaded, unzipped, read into R, then processed into regular data frames instead of JSON nested data frames.
+
+```{r ReadData,echo=FALSE}
+
+## Read JSON files (saved as .RDS locally) into R and flatten them
+
+businessData=flatten(readRDS("businessData.rds"))
+checkinData=flatten(readRDS("checkinData.rds"))
+reviewData=flatten(readRDS("reviewData.rds"))
+tipData=flatten(readRDS("tipData.rds"))
+userData=flatten(readRDS("userData.rds"))
+```
+
+### Data Processing
+
+Raw data needs to be processed in order to extract the required features for further analysis. The analysis explores data variables and selects the outcome and initial predictors. Variables are processed, merged into one final set, and, finally, screened to come up with the vital predictors used in the prediction.
+
+#### Outcome variable and predictors
+
+After studying the variables existing in *userData* and *reviewData* it's become clear that the *votes.useful* variable in the *reviewData* can be used as the **outcome** variable, whereas a combination of other variables from both datasets can be used to build model initial predictors (listed below).
+
+* **text**: the review text (source: *reviewData*)
+* **yelping_since**: a user's starting date of yelping (source: *userData*)
+* **review_count**: a user's total count of reviews (source: *userData*)
+* **friends**: a user's list of friends' IDs (source: *userData*)
+* **fans**: a user's count of fans (source: *userData*)
+* **elite**: a user's "elite" status in Yelp (source: *userData*)
+* **votes.useful**: a user's total count of "useful" votes received in Yelp (source: *userData*)
+* **compliments**: a user's total count of compliments received (by type) (source: *userData*)
+
+#### Variables processing and datasets merging
+
+The prediction algorithm will predict the extent of review usefulness in two ways:
+
+1. Predicting the number of *useful* votes for a review
+2. Predicting the *usefulness* category for a review as either "Not Useful", "Slightly Useful", "Moderately Useful", "Highly Useful", or "Extremely Useful"
+
+Hence, a new categorical variable representing review usefulness is required. Values of this variable are based on the number of *useful* votes using the following assumptions:
+
+* **Not Useful**: if number of *useful* votes is <= 1
+* **Slightly Useful**: if number of *useful* votes is >= 2 and <= 5
+* **Moderately Useful**: if number of *useful* votes is >= 6 and <= 15
+* **Highly Useful**: if number of *useful* votes is >= 16 and <= 25
+* **Extremely Useful**: if number of *useful* votes is >= 26
+
+The *usefulCat* function in the code is used to assign the Usefulness Category to each existing review. Besides, initial predictors need to be processed as explained below to make up the final predictors.
+
+```{r usefulCat,echo=FALSE}
+
+## a function to assign the Usefulness Category to each review based on
+## number of 'useful' votes
+
+        usefulCat<-function(usefulVotes,df) {
+                ifelse(usefulVotes<=1,"Not Useful",ifelse(usefulVotes>=2 & usefulVotes<=5,"Slightly Useful",ifelse(usefulVotes>=6 & usefulVotes<=15,"Moderately Useful",ifelse(usefulVotes>=16 & usefulVotes<=25,"Highly Useful","Extremely Useful"))))
+        }
+```
+
+* *text* will be used to make the **textLen** predictor which is the length of review text.
+
+* *votes.useful* (source: *userData*), which reflects the overall count of a user's *useful* votes received, will be renamed to **TotVotes.useful** to distinguish it from the outcome variable *votes.useful*
+
+* *yelping_since* will be used to make the **yelp_months** predictor as the yelping period in months.
+
+* *elite* will be used to make up the **is.elite** predictor as whether the user has an elite status or not.
+
+* *friends* will be used to come up with the number of friends of a user as **num_friends** variable.
+
+In addition to the above steps the processTbl function in the code performs the below processing steps:
+
+1. replaces NA's by zeros
+2. merges needed variables in both datasets into a new dataset (mergedData) using the user_id.
+3. drops unnecessary variables and removes incomplete cases (rows with NA's) from the mergedData
+
+```{r Processing,echo=FALSE}
+processTbl<-function(revTbl,userTbl){
+
+  ## a function to make several processing and cleaning steps to the data:
+  
+        # remove unnecessary variables from reviewData
+        
+        rmvCol<-c("type","votes.funny","votes.cool","stars")
+        revTbl<-revTbl[,!(names(revTbl) %in% rmvCol)]
+        
+        # add a new variable for review text characters length
+        
+        revTbl<-mutate(revTbl,textLen=nchar(text,keepNA = TRUE))
+        
+        # add the usefulness categorical variable based on the usefulCat function
+        
+        revTbl<-mutate(revTbl,Useful_Category=usefulCat(revTbl$votes.useful,revTbl))
+        
+        # replace NA's by zeros in UserData (Compliments variables)
+        
+        for (i in 13:23) {
+                userTbl[,i]<- as.numeric(str_replace_na(userTbl[,i],replacement = 0))
+        }
+        
+        # remove unnecessary variables from userData
+        
+        rmvCol<-c(3,7:8,10,12)
+        userTbl<-userTbl[,-rmvCol]
+        
+        # rename "votes.useful" in userData to TotVotes.useful
+        
+        userTbl<-rename(userTbl,TotVotes.useful= votes.useful)
+        
+        # calculate the user's yelping period in months up until 2015-01-01
+        
+        calYelp<- function(x){
+                # split the yelping_since into year and month
+                x<-as.data.frame(str_split_fixed(userTbl$yelping_since,"-",2))
+                
+                yr<-as.numeric(as.character(x$V1))
+                mon<-as.numeric(as.character(x$V2))
+                
+                yrs<-2015-yr
+                (yrs*12)-mon
+        }
+        
+        # add the yelp_months variable to the userData
+        
+        userTbl<-mutate(userTbl,yelp_months=calYelp(yelping_since))
+        
+        # add a TRUE/FALSE variable for Elite status
+        
+        userTbl$is.elite<-lapply(userTbl$elite,function(x) if(toString(x)=="") FALSE else TRUE)
+        userTbl$is.elite<-as.factor(as.character(userTbl$is.elite))
+        
+        # add the number of user's friends to the userData
+        
+        userTbl$num_friends<-sapply(userTbl$friends,length)
+        
+        # merge needed variables from both the user and review data into a new data set
+        
+        merged<-merge(revTbl,userTbl,by="user_id")
+        
+        # drop unnecessary columns in the merged data set
+        
+        rmvCol<-c("date","text","yelping_since","elite","friends")
+        merged<-merged[,!(names(merged) %in% rmvCol)]
+        
+        # detecting missing data in variables and picking the complete cases (not NA's)
+        
+        complCases<-complete.cases(merged)
+        merged<-merged[complCases,]
+}
+
+mergedData<-processTbl(reviewData,userData)
+```
+
+#### Variables screening
+
+Since including extra predictors increases standard errors of regression another variable screening step is performed. A **Correlation Test** for each *numeric* variable versus the output variable is done. Variables with the highest Correlation Coefficients (R) are selected.
+
+```{r VarsCorrelation, echo=FALSE}
+
+## select the numeric variables and test their correlation to the output variable
+
+numVarsCol<-c(5,7:21,23) # select the numeric variables
+df=NULL
+for(i in numVarsCol){
+        colNm<-colnames(mergedData[i])
+        cor<-round(as.numeric(cor.test(mergedData[,4],mergedData[,i])$estimate),3)
+        df=rbind(df,data.frame(Variable=colNm,corr=cor))
+}
+df<-arrange(df,desc(corr))
+
+# show the first and last 3 variable correlation coefficients
+
+minCorr<-min(df$corr);maxCorr<-max(df$corr);headTail(df,3,3,digits = 3)
+```
+
+Correlation Test results show that correlation coefficients range between 0.199 and 0.453. By setting a minimum of **0.25** we get **16 final predictors** to be used in prediction models (including non-numeric *is.elite*).
+
+```{r varsSelection,echo=FALSE}
+
+## filter for the variables having correlation coefficients higher than 0.25
+
+df<-df %>% filter(corr>=.25)
+
+rmvVars<-c("compliments.list","yelp_months")
+mergedData<-mergedData[,!(names(mergedData) %in% rmvVars)]
+```
+
+```{r finalPred,echo=FALSE}
+names(mergedData)[c(5,7:21)]
+```
+
+### Exploratory Data Analysis
+
+In this section we try to explore features of the *mergedData* using descriptive statistics and plots.
+
+#### Exploring the outcome variable
+
+```{r RevUVSummaryH,echo=FALSE}
+
+## summary statistics about the votes.useful
+
+numSum<-summary(mergedData$votes.useful)
+minS<-numSum[1]
+maxS<-numSum[6]
+avgS<-numSum[4]
+```
+
+By looking at the **Five-Number Summary** of the *useful* votes granted to reviews we can see that *useful* votes range between `r minS` vote to `r maxS` votes with an average of `r avgS` *useful* vote per review.
+
+```{r RevUVSummary,echo=TRUE,highlight=TRUE}
+summary(mergedData$votes.useful)
+```
+
+The **Histogram** and **Cumulative Curve** below show that 99% of reviews have received 0 to 10 *useful* votes.
+
+```{r UsefulVotesHist,echo=FALSE}
+
+## Histogram of votes.useful
+
+ggplot(data=mergedData, aes(mergedData$votes.useful)) + 
+  geom_histogram(breaks=seq(0, 50, by = 2), 
+                 col="red", 
+                 fill="green", 
+                 alpha = .2) + 
+  
+  labs(x="votes.useful", y="Reviews Count")+
+        theme(plot.title = element_text(size = 14, face = "bold", colour = "black", vjust = +1))+
+        ggtitle(expression(atop("Number of Reviews by count of Useful Votes",atop(bold("Fig.1")))))
+```
+
+```{r CumShareUV,echo=FALSE}
+
+## building the plot of Cummulative % of Reviews with 'Useful' Votes
+
+cumShare<-reviewData %>% group_by(votes.useful) %>% summarise(count=n())
+cumSum<-cumsum(cumShare$count)
+cumShare<-cumShare %>% mutate(cum = round((cumSum/sum(cumShare$count)),2))
+
+ggplot(data=cumShare,aes(cumShare$votes.useful,cumShare$cum))+
+        geom_line(colour="red",xlab="test")+scale_x_continuous(breaks=seq(0,150,by=10))+scale_y_continuous(breaks=seq(0,1,by=.05))+
+        
+        labs(y="Reviews cum. %")+
+        labs(x="votes.useful")+
+        theme(plot.title = element_text(size = 14, face = "bold", colour = "black", vjust = +1))+
+        ggtitle(expression(atop("Cummulative % of Reviews with 'Useful' Votes",atop(bold("Fig.2")))))
+```
+
+#### Exploring relationships between data features
+
+The plots below show the relationships between the outcome variable and some predictors.
+
+```{r pairPanel,echo=FALSE}
+
+## building the scatter plots of predictors vs output variable
+
+smplData<-sample_n(mergedData,size = 10000)
+
+varsNames<-c("TotVotes.useful","compliments.cool","compliments.note","compliments.hot","textLen","is.elite")
+
+par(mfrow=c(3,2),mar=c(2,2,1,1),oma=c(0,0,2,0))
+with(smplData,{
+  
+  for (n in 1:5){
+    plot(smplData[,varsNames[n]],votes.useful,main=paste(varsNames[n]," vs. votes.useful"))
+    modFit<-lm(votes.useful~smplData[,varsNames[n]],smplData)
+    abline(modFit,lwd=2,col="blue")
+  }
+        plot(smplData[,varsNames[6]],votes.useful,main=paste(varsNames[6]," vs. votes.useful"))
+  mtext("Useful Votes vs. some Predictors (Fig.3)", outer = TRUE)  
+})
+```
+
+In general, the selected predictors show a positive relationship with the outcome. Yet, the prediction model can give more insight into the ability to predict a useful review using the combination of these predictors.
+
+### Prediction Algorithms
+
+As explained above, the research predicts the extent of usefulness in two ways: by predicting the number of *useful* votes, and by predicting the *usefulness* category of a review. Hence, two models (**Model-A** and **Model-B**) will be fitted then used in both types of predictions. To train the models then test their accuracies we need to split the *mergedData* dataset into *training* and *testing* datasets (70/30 ratio).
+
+```{r SplitData,echo=TRUE,highlight=TRUE}
+set.seed(4040)
+inTrain<-createDataPartition(y=mergedData$votes.useful,p=0.7,list = FALSE)
+training<-mergedData[inTrain,];testing<-mergedData[-inTrain,]
+```
+
+```{r splitDim,echo=FALSE}
+trainRows<-dim(training)[1]
+testRows<-dim(testing)[1]
+trainCol<-dim(training)[2]
+```
+
+Data partitioning resulted in **`r trainRows`** records for *training* and **`r testRows`** records for *testing*.
+
+#### Model-A fitting and training
+
+In **Model-A** we try to fit then predict the number of *useful* votes. Since the outcome (**votes.useful**) is a discrete variable we will use the **Generalized Linear Model** (glm) method in our prediction algorithm. For a better estimate of prediction accuracy we will use **10-fold Cross Validation**. (model summary below)
+
+```{r FitModelA,echo=FALSE}
+
+## fitting the 'glm' model
+
+ModAFit<-train(votes.useful~textLen+fans+TotVotes.useful+compliments.funny+compliments.plain+compliments.writer+compliments.note+compliments.hot+compliments.cool+compliments.more+compliments.cute+review_count+compliments.photos+compliments.profile+is.elite+num_friends,
+              data = training,
+              method="glm",
+              trControl= trainControl(method = "cv",number = 10,allowParallel = TRUE))
+
+finMod<-ModAFit$finalModel;print(ModAFit)
+```
+
+```{r inSampleError,echo=FALSE}
+
+## in-sample error of Model-A
+
+ModAFitInErr<-round(ModAFit$results$RMSE,2)
+```
+
+Error of prediction algorithms that are based on regression models are measured in the **RMSE** value (Root Mean Squared Error). The trained model showed **`r ModAFitInErr`** "useful" votes as RMSE value.
+
+Model accuracy can also be measured by plotting the *residuals* of the model as shown in the figure. The residuals plot shows no specific patterns. Residuals are symmetrical around zero and, hence, randomly distributed. Besides, it is worth checking predictors importance in the model. The Variable Importance plot below shows that the *textLen* variable is the most important whereas the *compliments.photos* is the least.
+
+```{r modelAccu,echo=FALSE}
+
+## plot the Residuals and Variable Importance Plots
+
+plot(finMod$residuals,main = "Model Residuals Plot (Fig.4)")
+plot(varImp(ModAFit,scale = F),main="Variables Importance Plot (Fig.5)")
+```
+
+#### Model-A testing
+
+Now we need to test the model performance in predicting the outcome (*votes.useful*) on the testing dataset.
+
+```{r ModAPrediction,echo=TRUE,highlight=TRUE}
+pred<-predict(ModAFit,testing)
+ModAFitOutErr<-round(RMSE(pred,testing$votes.useful,na.rm = TRUE),2)
+```
+
+The out-of-sample error resulted from the prediction (represented by the RMSE value) is **`r ModAFitOutErr`** "useful" votes.
+
+#### Model-B fitting and training
+
+In Model-B we try to fit then predict the *usefulness* category of each review. Since the outcome (**Useful_Category**) is a categorical variable we will use the **Random Forest** prediction algorithm with **5-fold Cross Validation** for better estimate of the prediction error. Shown below is the model summary.
+
+```{r FitModelB,echo=FALSE,message=FALSE,warning=FALSE}
+
+## fitting the Random Forest model
+
+smplTraining = training[sample(1:nrow(training), size = round(.1*nrow(training),0)), ]
+
+set.seed(1500)
+ModBFit<-train(as.factor(Useful_Category)~textLen+fans+TotVotes.useful+compliments.funny+compliments.plain+compliments.writer+compliments.note+compliments.hot+compliments.cool+compliments.more+compliments.cute+review_count+compliments.photos+compliments.profile+is.elite+num_friends,
+              data = smplTraining,
+              method="rf",
+              trControl= trainControl(method = "cv",number = 5,allowParallel = TRUE))
+
+finModB<-ModBFit$finalModel;print(ModBFit)
+```
+
+```{r rfInErr,echo=FALSE}
+
+## in-sample error and accuracy of Model-B
+
+ModBFitInAcc<-round(ModBFit$results$Accuracy[1],2)
+ModBFitInErr<-1-ModBFitInAcc
+
+ModBFitInAcc<-sprintf("%1.0f%%",ModBFitInAcc*100)
+ModBFitInErr<-sprintf("%1.0f%%",ModBFitInErr*100)
+```
+
+The accuracy resulted from fitting Model-B is **`r ModBFitInAcc`**. Knowing that the in-sample error equals (1-Accuracy) the in-sample error is estimated to be **`r ModBFitInErr`**.
+
+#### Model-B testing
+
+Now we need to test model performance in predicting the outcome (*Useful_Category*) on the testing dataset.
+
+```{r rfPredict,echo=TRUE,message=FALSE,highlight=TRUE,warning=FALSE}
+rfPred<-predict(ModBFit,testing)
+rfCM<-confusionMatrix(rfPred,testing$Useful_Category);rfCM$overall
+```
+
+```{r rfOutErr,echo=FALSE}
+
+## out-of-sample error and accuracy of Model-B
+
+ModBFitOutAcc<-round(as.numeric(rfCM$overall[1]),2)
+ModBFitOutErr<-1-ModBFitOutAcc
+
+ModBFitOutAcc<-sprintf("%1.0f%%",ModBFitOutAcc*100)
+ModBFitOutErr<-sprintf("%1.0f%%",ModBFitOutErr*100)
+```
+
+The accuracy resulted from testing Model-B is **`r ModBFitOutAcc`**. Knowing that the out-of-sample error equals (1-Accuracy) the out-of-sample error is estimated to be **`r ModBFitOutErr`**.
+
+## Results
+
+The analysis used two datasets; *User* and *Review*. The datasets were processed, cleaned, and merged into a single dataset (*mergedData*) that contained two outcome variables (**votes.useful** and **Useful_Category**) and 16 predictors. EDA showed insight into the data features and some correlation between the variables.
+
+### Two models of prediction were trained and tested:
+
+**Model-A**: predicts the number of *useful* votes of a review. It's based on the *glm* algorithm, 10-fold cv, 16 predictors, and the outcome variable (*votes.useful*). In-sample-error (RMSE) was 1.67 "useful" votes, whereas the out-of-sample error was 1.68 "useful" votes when tested on the testing dataset. I.e. the model can predict number of "useful" votes with a deviation of nearly **`r ModAFitOutErr`** votes. A random sample of the predicted number of votes versus the actual votes is shown below.
+
+```{r predAShot,echo=FALSE}
+
+## sample records of actual vs predicted 'votes.useful'
+
+modAPred<-cbind(testing[,c(2,4)],Predicted.Votes=round(pred,0))
+modAPred<-rename(modAPred,Actual.Votes=votes.useful)
+
+set.seed(2500)
+sample_n(modAPred,size = 7)
+```
+
+**Model-B**: predicts the *usefulness* category for a review. It's based on **Random Forest** algorithm, 5-fold cv, 16 predictors, and the outcome variable (*Useful_Category*). In-sample and out-of-sample errors were **`r ModBFitOutErr`**. I.e. the model can predict the usefulness category with **`r ModBFitOutAcc`** accuracy. A random sample of predicted versus actual "Usefulness Category" is shown below.
+
+```{r predBShot,echo=FALSE}
+
+## sample records of actual vs predicted 'Useful_Category'
+
+modBPred<-cbind(testing[,c(2,6)],Predicted.Category=rfPred)
+modBPred<-rename(modBPred,Actual.Category=Useful_Category)
+
+set.seed(2500)
+sample_n(modBPred,size = 7)
+```
+
+## Discussion
+
+In conclusion, applying both prediction models (Mode-A and Model-B) to the Yelp data enables us to predict, **with an acceptable accuracy level**, the extent of usefulness of a user's review for a business by predicting the number of "useful" votes and the "usefulness" category. For **Model-A**, the prediction error (**`r ModAFitOutErr` "useful" votes**) is very reasonable in predicting the number of useful votes. Similarly, in **Model-B** the prediction accuracy (**`r ModBFitOutAcc`**) looks also reasonable in classifying the usefulness of a user's review. However, both models can be considered for further fine-tuning and improvement.
+
+Both models can have positive implications on the yelp.com, yelpers, and businesses as their prediction capacity helps exploit potential useful reviews as soon as they are posted in an effort to be proactive in improving businesses and to provide quicker recommendations for potential customers.
